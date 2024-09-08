@@ -1,101 +1,133 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
-import 'package:logging/logging.dart';
+import 'package:bishop/bishop.dart' as bishop;
+import 'package:squares/squares.dart' as squares;
+import 'package:square_bishop/square_bishop.dart';
 import 'package:stockfish/stockfish.dart';
 
-import 'src/output_widget.dart';
-
 void main() {
-  Logger.root.level = Level.ALL;
-  Logger.root.onRecord.listen((record) {
-    debugPrint('${record.level.name}: ${record.time}: ${record.message}');
-  });
-
-  runApp(const MyApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const App());
 }
 
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+class App extends StatelessWidget {
+  const App({super.key});
   @override
-  State<StatefulWidget> createState() => _AppState();
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Play with stockfish',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+      ),
+      home: const HomePage(),
+    );
+  }
 }
 
-class _AppState extends State<MyApp> {
-  late Stockfish stockfish;
+class HomePage extends StatefulWidget {
+  const HomePage({Key? key}) : super(key: key);
+  @override 
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  late bishop.Game game;
+  late SquaresState state;
+  int player = squares.Squares.white;
+  bool aiThinking = false;
+  bool flipBoard = false;
+  String fen='';
+  String bestMove='';
+  String engineStatus='';
+  String output='';
+  final stockfish = Stockfish();
 
   @override
   void initState() {
+    _resetGame(false);
     super.initState();
-    stockfish = Stockfish();
+  }
+
+  void _resetGame([bool ss = true]) {
+    game = bishop.Game(variant: bishop.Variant.standard());
+    state = game.squaresState(player);
+    if (ss) setState(() {});
+  }
+
+  void _flipBoard() => setState(() => flipBoard = !flipBoard);
+
+  void _onMove(squares.Move move) async {
+    bool result = game.makeSquaresMove(move);
+    fen = game.fen;
+
+    if (result) {
+      setState(() => state = game.squaresState(player));
+    }
+
+    // Ask Stockfish for the best move if it's the engine's turn
+    if (state.state == squares.PlayState.theirTurn && !aiThinking) {
+      setState(() => aiThinking = true);
+
+      stockfish.stdin='position fen $fen';
+      stockfish.stdin='go movetime 2000';
+
+      stockfish.stdout.listen((line) {
+        if (line.startsWith('bestmove')) {
+          bestMove = line.substring(9, 13);  // Extract the best move
+
+          // Convert Stockfish move to a bishop Move object
+          bishop.Move? aiMove = game.getMove(bestMove);
+
+          if (aiMove != null) {
+            game.makeMove(aiMove);  // Make the engine's move in the game
+            setState(() {
+              state = game.squaresState(player);
+              aiThinking = false;
+            });
+          }
+        }
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Stockfish example app'),
-        ),
-        body: Column(
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('play with stockfish'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: AnimatedBuilder(
-                animation: stockfish.state,
-                builder: (_, __) => Text(
-                  'stockfish.state=${stockfish.state.value}',
-                  key: const ValueKey('stockfish.state'),
+              padding: const EdgeInsets.all(4.0),
+              child: squares.BoardController(
+                state: flipBoard ? state.board.flipped() : state.board,
+                playState: state.state,
+                pieceSet: squares.PieceSet.merida(),
+                theme: squares.BoardTheme.brown,
+                moves: state.moves,
+                onMove: _onMove,
+                onPremove: _onMove,
+                markerTheme: squares.MarkerTheme(
+                  empty: squares.MarkerTheme.dot,
+                  piece: squares.MarkerTheme.corners(),
                 ),
+                promotionBehaviour: squares.PromotionBehaviour.autoPremove,
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: AnimatedBuilder(
-                animation: stockfish.state,
-                builder: (_, __) => ElevatedButton(
-                  onPressed: stockfish.state.value == StockfishState.disposed
-                      ? () {
-                          final newInstance = Stockfish();
-                          setState(() => stockfish = newInstance);
-                        }
-                      : null,
-                  child: const Text('Reset Stockfish instance'),
-                ),
-              ),
+            const SizedBox(height: 32),
+            OutlinedButton(
+              onPressed: _resetGame,
+              child: const Text('New Game'),
             ),
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: TextField(
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Custom UCI command',
-                  hintText: 'go infinite',
-                ),
-                onSubmitted: (value) => stockfish.stdin = value,
-                textInputAction: TextInputAction.send,
-              ),
-            ),
-            Wrap(
-              children: [
-                'd',
-                'isready',
-                'go infinite',
-                'go movetime 3000',
-                'stop',
-                'quit',
-              ]
-                  .map(
-                    (command) => Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: ElevatedButton(
-                        onPressed: () => stockfish.stdin = command,
-                        child: Text(command),
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
-            ),
-            Expanded(
-              child: OutputWidget(stockfish.stdout),
+            Text(fen),
+            Text("Black's bestMove: "+bestMove),
+            IconButton(
+              onPressed: _flipBoard,
+              icon: const Icon(Icons.rotate_left),
             ),
           ],
         ),
